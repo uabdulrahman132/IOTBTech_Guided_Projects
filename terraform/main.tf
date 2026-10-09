@@ -18,16 +18,16 @@ locals {
   ssh_user = "ubuntu"
   key_path = "/home/ubuntu/.ssh/id_ed25519"
 
-  # Ansible inventory handed to the master node.
+  # Ansible inventory handed to the control node.
   inventory = templatefile("${path.module}/templates/hosts.ini.tftpl", {
-    control_private_ip = aws_instance.control.private_ip
+    managed_private_ip = aws_instance.managed.private_ip
     ssh_user           = local.ssh_user
     ssh_key_path       = local.key_path
   })
 
-  # Cloud-init script for the master: installs Ansible and writes
+  # Cloud-init script for the control node: installs Ansible and writes
   # ~/.ansible.cfg, ~/ansible/hosts.ini and ~/ansible/playbook.yml.
-  master_user_data = templatefile("${path.module}/templates/setup-master.sh.tftpl", {
+  control_user_data = templatefile("${path.module}/templates/setup-control.sh.tftpl", {
     ansible_cfg     = file("${path.module}/ansible/ansible.cfg")
     inventory       = local.inventory
     playbook        = file("${path.module}/ansible/playbook.yml")
@@ -104,12 +104,12 @@ resource "aws_default_security_group" "this" {
 }
 
 # ------------------------------------------------------- security group ------
-# One SG for both nodes: master Ansible -> control over SSH, admin -> both,
-# everyone (http_ingress_cidrs) -> control on port 80.
+# One SG for both nodes: control Ansible -> managed over SSH, admin -> both,
+# everyone (http_ingress_cidrs) -> managed on port 80.
 
 resource "aws_security_group" "this" {
   name        = "${local.name_prefix}-sg"
-  description = "master + control nodes"
+  description = "control + managed nodes"
   vpc_id      = aws_vpc.this.id
 
   tags = { Name = "${local.name_prefix}-sg" }
@@ -132,7 +132,7 @@ resource "aws_vpc_security_group_ingress_rule" "ssh_between_nodes" {
   ip_protocol                  = "tcp"
   from_port                    = 22
   to_port                      = 22
-  description                  = "SSH from master to control (Ansible)"
+  description                  = "SSH from control to managed (Ansible)"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "http" {
@@ -146,7 +146,7 @@ resource "aws_vpc_security_group_ingress_rule" "http" {
   description       = "HTTP"
 }
 
-# Outbound: apt / pip / Docker Hub (80, 443) and Ansible's SSH to the control node.
+# Outbound: apt / pip / Docker Hub (80, 443) and Ansible's SSH to the managed node.
 resource "aws_vpc_security_group_egress_rule" "web_http" {
   security_group_id = aws_security_group.this.id
   cidr_ipv4         = "0.0.0.0/0"
@@ -171,7 +171,7 @@ resource "aws_vpc_security_group_egress_rule" "ssh_between_nodes" {
   ip_protocol                  = "tcp"
   from_port                    = 22
   to_port                      = 22
-  description                  = "SSH from master to control (Ansible)"
+  description                  = "SSH from control to managed (Ansible)"
 }
 
 # ----------------------------------------------------------------- nodes -----
@@ -179,6 +179,38 @@ resource "aws_vpc_security_group_egress_rule" "ssh_between_nodes" {
 resource "aws_key_pair" "this" {
   key_name   = "${local.name_prefix}-key"
   public_key = file(pathexpand(var.ssh_public_key_path))
+}
+
+resource "aws_instance" "managed" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public.id
+  vpc_security_group_ids      = [aws_security_group.this.id]
+  key_name                    = aws_key_pair.this.key_name
+  associate_public_ip_address = true
+  ebs_optimized               = true
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  root_block_device {
+    volume_type           = "gp3"
+    volume_size           = var.root_volume_size_gb
+    encrypted             = true
+    delete_on_termination = true
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-managed"
+    Role = "managed"
+  }
+
+  lifecycle {
+    ignore_changes = [ami]
+  }
 }
 
 resource "aws_instance" "control" {
@@ -189,6 +221,10 @@ resource "aws_instance" "control" {
   key_name                    = aws_key_pair.this.key_name
   associate_public_ip_address = true
   ebs_optimized               = true
+
+  # Installs Ansible and writes the inventory/cfg/playbook on first boot.
+  user_data                   = local.control_user_data
+  user_data_replace_on_change = true
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -206,42 +242,6 @@ resource "aws_instance" "control" {
   tags = {
     Name = "${local.name_prefix}-control"
     Role = "control"
-  }
-
-  lifecycle {
-    ignore_changes = [ami]
-  }
-}
-
-resource "aws_instance" "master" {
-  ami                         = data.aws_ami.ubuntu.id
-  instance_type               = var.instance_type
-  subnet_id                   = aws_subnet.public.id
-  vpc_security_group_ids      = [aws_security_group.this.id]
-  key_name                    = aws_key_pair.this.key_name
-  associate_public_ip_address = true
-  ebs_optimized               = true
-
-  # Installs Ansible and writes the inventory/cfg/playbook on first boot.
-  user_data                   = local.master_user_data
-  user_data_replace_on_change = true
-
-  metadata_options {
-    http_endpoint               = "enabled"
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
-  }
-
-  root_block_device {
-    volume_type           = "gp3"
-    volume_size           = var.root_volume_size_gb
-    encrypted             = true
-    delete_on_termination = true
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-master"
-    Role = "master"
   }
 
   lifecycle {

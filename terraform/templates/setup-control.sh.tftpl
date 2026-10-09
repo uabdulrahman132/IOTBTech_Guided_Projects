@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cloud-init user_data for the master node: install Ansible and drop the
+# cloud-init user_data for the control node: install Ansible and drop the
 # inventory, config and playbook in place. Afterwards you can just SSH in and
 # run `ansible-playbook ~/ansible/playbook.yml`.
 set -euo pipefail
@@ -12,7 +12,7 @@ apt-get install -y python3-pip openssh-client
 pip3 install --no-cache-dir 'ansible==9.*'
 
 # Private key: the same key pair both instances use, so Ansible can reach the
-# control node. The heredocs are quoted on purpose - no shell expansion.
+# managed node. The heredocs are quoted on purpose - no shell expansion.
 cat > /home/ubuntu/.ansible.cfg <<'ANSIBLE_CFG'
 ${ansible_cfg}
 ANSIBLE_CFG

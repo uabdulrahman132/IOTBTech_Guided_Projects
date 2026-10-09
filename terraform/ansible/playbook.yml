@@ -1,6 +1,6 @@
 ---
-- name: Configure the control nodes
-  hosts: control
+- name: Configure the managed nodes
+  hosts: managed
   become: true
   gather_facts: false
 

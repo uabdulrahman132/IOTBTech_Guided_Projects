@@ -1,6 +1,6 @@
-# Written to the master node by Terraform - do not edit by hand.
-[control]
-control-node ansible_host=${control_private_ip} node_role=control
+# Written to the control node by Terraform - do not edit by hand.
+[managed]
+managed-node ansible_host=${managed_private_ip} node_role=managed
 
 [all:vars]
 ansible_user=${ssh_user}

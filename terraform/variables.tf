@@ -42,7 +42,7 @@ variable "ssh_public_key_path" {
 }
 
 variable "ssh_private_key_path" {
-  description = "Path to the matching private key. Terraform reads it once and hands it to the master node so Ansible can reach the control node."
+  description = "Path to the matching private key. Terraform reads it once and hands it to the control node so Ansible can reach the managed node."
   type        = string
 }
 
