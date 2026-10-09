@@ -1,0 +1,13 @@
+# Copy to backend.tf, replace the values, then run `terraform init -migrate-state`.
+# The bucket must already exist, with versioning and default encryption enabled
+# and public access blocked. `use_lockfile` needs Terraform >= 1.10; on older
+# versions use a DynamoDB table via `dynamodb_table` instead.
+terraform {
+  backend "s3" {
+    bucket       = "my-org-terraform-state"
+    key          = "aws-iac-demo/dev/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}

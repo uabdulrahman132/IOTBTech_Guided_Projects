@@ -1,0 +1,178 @@
+---
+- name: Configure the control nodes
+  hosts: control
+  become: true
+  gather_facts: false
+
+  vars:
+    docker_users:
+      - ubuntu
+    app_name: web
+    app_image: nginx
+    app_image_tag: "1.27-alpine" # pin a tag; never use :latest in production
+    app_published_port: 80
+    app_dir: /opt/web
+
+  pre_tasks:
+    - name: Wait for SSH to become available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Wait for cloud-init to finish (avoids apt lock races on first boot)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+  tasks:
+    # ---- Docker ------------------------------------------------------------
+    - name: Install Docker prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 180
+
+    - name: Ensure apt keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: Install Docker Engine and the Python SDK used by community.docker
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - python3-docker
+        state: present
+        lock_timeout: 180
+
+    - name: Enable and start Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add users to the docker group
+      ansible.builtin.user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop: "{{ docker_users }}"
+
+    # ---- Nginx container ---------------------------------------------------
+    - name: Create application directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ app_dir }}"
+        - "{{ app_dir }}/conf.d"
+        - "{{ app_dir }}/html"
+
+    - name: Render Nginx server configuration
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/conf.d/default.conf"
+        mode: "0644"
+        content: |
+          server {
+              listen 80 default_server;
+              server_name _;
+              server_tokens off;
+
+              root /usr/share/nginx/html;
+              index index.html;
+
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header X-Frame-Options "DENY" always;
+
+              location = /healthz {
+                  access_log off;
+                  default_type text/plain;
+                  return 200 "ok\n";
+              }
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+          }
+      notify: Restart app container
+
+    - name: Render landing page
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/html/index.html"
+        mode: "0644"
+        content: |
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>{{ inventory_hostname }}</title>
+          </head>
+          <body>
+            <h1>Hello from the {{ node_role }} node</h1>
+            <p>Host: {{ inventory_hostname }}</p>
+            <p>Image: {{ app_image }}:{{ app_image_tag }}</p>
+          </body>
+          </html>
+
+    - name: Run the Nginx container on port {{ app_published_port }}
+      community.docker.docker_container:
+        name: "{{ app_name }}"
+        image: "{{ app_image }}:{{ app_image_tag }}"
+        state: started
+        restart_policy: unless-stopped
+        published_ports:
+          - "{{ app_published_port }}:80"
+        volumes:
+          - "{{ app_dir }}/conf.d:/etc/nginx/conf.d:ro"
+          - "{{ app_dir }}/html:/usr/share/nginx/html:ro"
+        security_opts:
+          - no-new-privileges:true
+        cap_drop:
+          - ALL
+        capabilities:
+          - CHOWN
+          - SETGID
+          - SETUID
+          - NET_BIND_SERVICE
+
+    - name: Verify the app answers its health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_published_port }}/healthz"
+        status_code: 200
+      register: app_health
+      until: app_health.status == 200
+      retries: 10
+      delay: 3
+
+  handlers:
+    - name: Restart app container
+      community.docker.docker_container:
+        name: "{{ app_name }}"
+        restart: true

@@ -1,0 +1,37 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.tfstate.lock.info
+tfplan
+*.tfplan
+backend.tf
+.terraform.lock.hcl
+
+
+# Secrets / keys
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.env
+.env.*
+.vault_pass
+.vault_password
+vault_pass.txt
+*.vault
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

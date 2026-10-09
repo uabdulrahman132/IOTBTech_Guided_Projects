@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# cloud-init user_data for the master node: install Ansible and drop the
+# inventory, config and playbook in place. Afterwards you can just SSH in and
+# run `ansible-playbook ~/ansible/playbook.yml`.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y python3-pip openssh-client
+
+# ansible 9.x ships ansible-core 2.16 plus the community collections.
+pip3 install --no-cache-dir 'ansible==9.*'
+
+# Private key: the same key pair both instances use, so Ansible can reach the
+# control node. The heredocs are quoted on purpose - no shell expansion.
+cat > /home/ubuntu/.ansible.cfg <<'ANSIBLE_CFG'
+${ansible_cfg}
+ANSIBLE_CFG
+
+cat > /home/ubuntu/.ssh/id_ed25519 <<'SSH_KEY'
+${ssh_private_key}
+SSH_KEY
+
+mkdir -p /home/ubuntu/ansible
+cat > /home/ubuntu/ansible/hosts.ini <<'INVENTORY'
+${inventory}
+INVENTORY
+
+cat > /home/ubuntu/ansible/playbook.yml <<'PLAYBOOK'
+${playbook}
+PLAYBOOK
+
+chown -R ubuntu:ubuntu /home/ubuntu/.ansible.cfg /home/ubuntu/.ssh /home/ubuntu/ansible
+chmod 0700 /home/ubuntu/.ssh
+chmod 0600 /home/ubuntu/.ssh/id_ed25519
+chmod 0644 /home/ubuntu/.ansible.cfg /home/ubuntu/ansible/hosts.ini /home/ubuntu/ansible/playbook.yml
+
+# Only if the bundled version does not satisfy the constraint below.
+sudo -u ubuntu -H ansible-galaxy collection install 'community.docker:>=3.10.0,<4.0.0'
+
+# Marker: setup finished (see README for the readiness one-liner).
+touch /home/ubuntu/.ansible-ready
+chown ubuntu:ubuntu /home/ubuntu/.ansible-ready
